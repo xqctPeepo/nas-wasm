@@ -50,8 +50,8 @@ WORKDIR /app
 # Copy package files for dependency caching
 COPY package.json package-lock.json* ./
 
-# Install dependencies
-RUN npm ci --only=production=false
+# Install dependencies (npm ci installs all dependencies including devDependencies by default)
+RUN npm ci
 
 # Copy Rust build output
 COPY --from=rust-builder /app/pkg ./pkg
