@@ -14,6 +14,7 @@ server {
     keepalive_requests 100;
 
     # WASM MIME type (critical for WebAssembly)
+    # Must come BEFORE /pkg/ location to ensure WASM files get correct MIME type
     location ~ \.wasm$ {
         add_header Content-Type application/wasm;
         add_header Cache-Control "public, max-age=31536000, immutable";
@@ -21,14 +22,22 @@ server {
         add_header Access-Control-Allow-Origin *;
     }
 
-    # Serve pkg/ directory with correct MIME type for ES modules
+    # Serve pkg/ directory JavaScript files with correct MIME type for ES modules
     # This ensures wasm-bindgen generated modules load correctly with all exports available
-    location /pkg/ {
+    # Only matches .js files to avoid conflicting with WASM files
+    location ~ ^/pkg/.*\.js$ {
         # Explicitly set JavaScript MIME type for ES modules
         # text/javascript is the standard for ES modules, application/javascript also works
         add_header Content-Type "text/javascript; charset=utf-8";
         add_header Cache-Control "public, max-age=31536000, immutable";
         # CORS headers for module loading
+        add_header Access-Control-Allow-Origin *;
+        try_files $uri =404;
+    }
+    
+    # Serve other files in pkg/ directory (like .d.ts, .wasm.d.ts)
+    location /pkg/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
         add_header Access-Control-Allow-Origin *;
         try_files $uri =404;
     }

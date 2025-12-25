@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import { resolve } from 'path';
-import { copyFileSync, mkdirSync, readdirSync, existsSync, rmSync, readFileSync, writeFileSync } from 'fs';
+import { copyFileSync, mkdirSync, readdirSync, existsSync, rmSync, readFileSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 // Custom plugin for dev server routing
@@ -64,6 +64,11 @@ function copyDir(src: string, dest: string, moduleName: string): void {
       // For JS files, read, rewrite import.meta.url to use absolute paths, then write
       let content = readFileSync(srcPath, 'utf-8');
       
+      // Verify file has content before processing
+      if (!content || content.length === 0) {
+        throw new Error(`Empty file: ${srcPath}`);
+      }
+      
       // Rewrite: new URL('wasm_module_bg.wasm', import.meta.url)
       // To: '/pkg/wasm_module/wasm_module_bg.wasm'
       // This ensures WASM binaries load correctly regardless of where the script is located
@@ -75,7 +80,24 @@ function copyDir(src: string, dest: string, moduleName: string): void {
         }
       );
       
+      // Verify exports are preserved (check for export statements)
+      const exportCount = (content.match(/^export\s+(function|const|let|var|default|{)/gm) || []).length;
+      if (exportCount === 0 && entry.name.includes('wasm_')) {
+        throw new Error(`File ${destPath} appears to have no exports after processing`);
+      }
+      
+      // Verify file size is reasonable (should be at least 1KB for WASM modules)
+      if (content.length < 1000 && entry.name.includes('wasm_') && !entry.name.includes('.d.ts')) {
+        throw new Error(`File ${destPath} is suspiciously small (${content.length} bytes). Original: ${srcPath}`);
+      }
+      
       writeFileSync(destPath, content, 'utf-8');
+      
+      // Verify the written file
+      const writtenContent = readFileSync(destPath, 'utf-8');
+      if (writtenContent.length !== content.length) {
+        throw new Error(`File write verification failed for ${destPath}. Expected ${content.length} bytes, got ${writtenContent.length}`);
+      }
     } else {
       copyFileSync(srcPath, destPath);
     }
