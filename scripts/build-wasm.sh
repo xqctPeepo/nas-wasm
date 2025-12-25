@@ -16,6 +16,10 @@ OUTPUT_DIR=$2
 THIS_SCRIPTS_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$THIS_SCRIPTS_DIR/.."
 
+# Ensure wasm-bindgen is in PATH (cargo install puts it in ~/.cargo/bin)
+# This is important in Docker where PATH might not be properly inherited
+export PATH="${HOME}/.cargo/bin:/root/.cargo/bin:${PATH}"
+
 echo "==========================================================="
 echo "BUILDING $CRATE_NAME TO WASM"
 echo "==========================================================="
@@ -27,7 +31,11 @@ if ! command -v cargo &> /dev/null; then
 fi
 
 if ! command -v wasm-bindgen &> /dev/null; then
-    echo "Error: wasm-bindgen not found. Install with: cargo install wasm-bindgen-cli"
+    echo "Error: wasm-bindgen not found. Install with: cargo install wasm-bindgen-cli" >&2
+    echo "Current PATH: $PATH" >&2
+    echo "Checking common locations:" >&2
+    ls -la ~/.cargo/bin/wasm-bindgen 2>/dev/null || echo "  ~/.cargo/bin/wasm-bindgen: not found" >&2
+    ls -la /root/.cargo/bin/wasm-bindgen 2>/dev/null || echo "  /root/.cargo/bin/wasm-bindgen: not found" >&2
     exit 1
 fi
 
@@ -37,19 +45,27 @@ mkdir -p "$OUTPUT_DIR"
 # Add wasm32 target if not already added
 rustup target add wasm32-unknown-unknown 2>/dev/null || true
 
+# Cargo converts hyphens to underscores in output filenames
+# Use sed instead of tr for better Alpine Linux compatibility
+WASM_FILENAME=$(echo "$CRATE_NAME" | sed 's/-/_/g')
+
 # Compile to wasm
 echo "Compiling $CRATE_NAME to WASM..."
 # Clean the specific package build to ensure we're building fresh (not using cached dummy files)
-# This is important in Docker where dummy files might be cached
+# This is critical in Docker where dummy files are built first for dependency caching
+# We need to aggressively clean to ensure cargo rebuilds with the real source files
+echo "Cleaning previous build artifacts for $CRATE_NAME..."
 cargo clean --package "$CRATE_NAME" 2>/dev/null || true
+# Also explicitly remove WASM artifacts to force rebuild
+rm -f "target/wasm32-unknown-unknown/release/${WASM_FILENAME}.wasm" 2>/dev/null || true
+rm -f "target/wasm32-unknown-unknown/release/deps/${WASM_FILENAME}*" 2>/dev/null || true
+# Remove incremental compilation artifacts for this package
+rm -rf "target/wasm32-unknown-unknown/release/incremental/${WASM_FILENAME}*" 2>/dev/null || true
+
 if ! cargo build --target wasm32-unknown-unknown --release --package "$CRATE_NAME"; then
     echo "ERROR: cargo build failed for $CRATE_NAME" >&2
     exit 1
 fi
-
-# Cargo converts hyphens to underscores in output filenames
-# Use sed instead of tr for better Alpine Linux compatibility
-WASM_FILENAME=$(echo "$CRATE_NAME" | sed 's/-/_/g')
 INPUT_WASM="target/wasm32-unknown-unknown/release/${WASM_FILENAME}.wasm"
 
 # Verify input WASM file exists and has reasonable size before running wasm-bindgen
