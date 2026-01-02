@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#000000">
+    <title>Babylon Chunks - Wave Function Collapse 3D - Sigma WASM</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="icon" type="image/webp" href="/rustacean.webp">
+    <link rel="apple-touch-icon" href="/rustacean.webp">
+    <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body>
+    <div id="fullscreen">
+        <div class="preprocess-container">
+            <!-- Home link -->
+            <a href="/" class="home-link" title="Home">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                    <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                </svg>
+            </a>
+            
+            <h1>Babylon Chunks - Wave Function Collapse 3D</h1>
+            
+            <!-- Error display -->
+            <div id="error" class="error-message"></div>
+            
+            <!-- About section -->
+            <div class="preprocess-section">
+                <h2>About Wave Function Collapse</h2>
+                <p>
+                    This demo showcases the <strong>Wave Function Collapse (WFC)</strong> algorithm
+                    implemented in Rust WASM and visualized in 3D using BabylonJS. The layout uses a
+                    hexagonal grid pattern with hash map storage for efficient sparse grid management.
+                </p>
+                <p>
+                    <strong>How WFC Works:</strong>
+                </p>
+                <ul>
+                    <li><strong>Hexagonal Grid:</strong> Uses a pointy-top hex grid with axial coordinates (q, r)</li>
+                    <li><strong>Pre-constraints:</strong> Tile types are set before WFC begins based on layout constraints</li>
+                    <li><strong>Hash Map Storage:</strong> Efficient O(1) lookups with no grid size limitations</li>
+                    <li><strong>Entropy-based collapse:</strong> The algorithm tracks entropy (number of possibilities) for each cell</li>
+                    <li><strong>Lowest entropy first:</strong> Cells with fewest possibilities are collapsed first to minimize contradictions</li>
+                    <li><strong>Constraint propagation:</strong> When tiles are placed, incompatible tiles are removed from neighbors</li>
+                    <li>Repeats until the grid is complete or a contradiction occurs</li>
+                </ul>
+                <p>
+                    <strong>Tile Color Legend:</strong>
+                </p>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1rem 0;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div style="width: 30px; height: 30px; background-color: rgb(51, 204, 51); border: 1px solid #333;"></div>
+                        <span><strong>Grass</strong> - Natural terrain areas</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div style="width: 30px; height: 30px; background-color: rgb(127, 127, 127); border: 1px solid #333;"></div>
+                        <span><strong>Building</strong> - Structures and constructions</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div style="width: 30px; height: 30px; background-color: rgb(76, 76, 76); border: 1px solid #333;"></div>
+                        <span><strong>Road</strong> - Pathways and routes</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div style="width: 30px; height: 30px; background-color: rgb(25, 127, 25); border: 1px solid #333;"></div>
+                        <span><strong>Forest</strong> - Trees and vegetation</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div style="width: 30px; height: 30px; background-color: rgb(51, 102, 204); border: 1px solid #333;"></div>
+                        <span><strong>Water</strong> - Water bodies and lakes</span>
+                    </div>
+                </div>
+                <p>
+                    <strong>Features:</strong>
+                </p>
+                <ul>
+                    <li><strong>5 Simple Tile Types:</strong> Grass, Building, Road, Forest, and Water</li>
+                    <li><strong>Hexagonal Grid:</strong> 30-layer hexagon pattern (2791 tiles) with no size limitations</li>
+                    <li><strong>Hash Map Storage:</strong> Efficient sparse grid storage with O(1) lookups</li>
+                    <li><strong>GLB Model Loading:</strong> Uses hex_tile.glb model (17.3m x 20m, pointy-top orientation)</li>
+                    <li><strong>Mesh Instancing:</strong> Efficient rendering using BabylonJS instancing</li>
+                    <li><strong>3D Visualization:</strong> Interactive camera controls with hexagon-centered layout</li>
+                    <li><strong>Babylon 2D UI:</strong> Native UI controls for recompute and fullscreen</li>
+                </ul>
+                <p>
+                    <strong>Controls:</strong>
+                </p>
+                <ul>
+                    <li>Mouse drag to rotate camera</li>
+                    <li>Mouse wheel to zoom</li>
+                    <li>Use Babylon 2D UI buttons to recompute or toggle fullscreen</li>
+                </ul>
+            </div>
+            
+            <!-- Text-to-Layout Input -->
+            <div id="layoutGenerationContainer" class="preprocess-section">
+                <h2>Text-to-Layout Generation</h2>
+                <p>Enter a text prompt to generate a layout. The Qwen model will interpret your request and create constraints for the WFC algorithm.</p>
+                <div style="display: flex; gap: 1rem; align-items: center; margin: 1rem 0;">
+                    <input type="text" id="layoutPromptInput" placeholder="e.g., 'Generate a small level with mostly grass and few buildings.'" style="flex: 1; padding: 0.5rem; font-size: 1rem;">
+                    <button id="generateFromTextBtn" style="padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer;">Generate from Text</button>
+                </div>
+                <div id="modelStatus" style="margin-top: 0.5rem; font-style: italic; color: #666;"></div>
+            </div>
+            
+            <!-- Canvas for BabylonJS rendering -->
+            <div class="preprocess-section">
+                <h2>3D Visualization</h2>
+                <p>The WFC-generated grid is rendered below. Use mouse controls to navigate.</p>
+                <canvas id="renderCanvas" style="width: 100%; height: 600px; display: block; border: 1px solid #333;"></canvas>
+            </div>
+            
+            <!-- System Logs -->
+            <div id="systemLogs" class="system-logs-container">
+                <h3>System Logs</h3>
+                <div id="systemLogsContent" class="system-logs-content"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
+

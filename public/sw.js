@@ -21,6 +21,7 @@ const PRECACHE_PAGES = [
   '/pages/preprocess-smolvlm-500m.html',
   '/pages/hello-wasm.html',
   '/pages/babylon-wfc.html',
+  '/pages/babylon-chunks.html',
   '/manifest.json',
 ];
 

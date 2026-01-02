@@ -53,6 +53,10 @@ function devServerRouting(): Plugin {
           else if (url === '/babylon-wfc' || url.startsWith('/babylon-wfc?')) {
             req.url = '/pages/babylon-wfc.html' + (url.includes('?') ? url.substring(url.indexOf('?')) : '');
           }
+          // Rewrite /babylon-chunks to /pages/babylon-chunks.html
+          else if (url === '/babylon-chunks' || url.startsWith('/babylon-chunks?')) {
+            req.url = '/pages/babylon-chunks.html' + (url.includes('?') ? url.substring(url.indexOf('?')) : '');
+          }
           // Rewrite /multilingual-chat to /pages/multilingual-chat.html
           else if (url === '/multilingual-chat' || url.startsWith('/multilingual-chat?')) {
             req.url = '/pages/multilingual-chat.html' + (url.includes('?') ? url.substring(url.indexOf('?')) : '');
@@ -697,6 +701,7 @@ export default defineConfig({
         // **Learning Point**: Add new HTML pages here for build system to include them
         'hello-wasm': resolve(__dirname, 'pages/hello-wasm.html'),
         'babylon-wfc': resolve(__dirname, 'pages/babylon-wfc.html'),
+        'babylon-chunks': resolve(__dirname, 'pages/babylon-chunks.html'),
         'multilingual-chat': resolve(__dirname, 'pages/multilingual-chat.html'),
       },
       output: {
