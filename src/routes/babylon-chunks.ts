@@ -21,7 +21,7 @@ import { Engine, Scene, ArcRotateCamera, HemisphericLight, DirectionalLight, Vec
 import '@babylonjs/loaders/glTF';
 import { SceneLoader } from '@babylonjs/core';
 import '@babylonjs/core/Meshes/thinInstanceMesh';
-import { AdvancedDynamicTexture, Button } from '@babylonjs/gui';
+import { AdvancedDynamicTexture, Button, Control } from '@babylonjs/gui';
 // Worker message and response types using discriminated unions
 type LoadEmbeddingMessage = {
   id: string;
@@ -3920,14 +3920,16 @@ export const init = async (): Promise<void> => {
   // Set up Babylon 2D UI
   const advancedTexture = AdvancedDynamicTexture.CreateFullscreenUI('UI');
   
-  // Recompute button
+  // Recompute button - positioned top right using percentage-based alignment
   const recomputeButton = Button.CreateSimpleButton('recomputeButton', 'Recompute Wave Collapse');
   recomputeButton.width = '200px';
   recomputeButton.height = '40px';
   recomputeButton.color = 'white';
   recomputeButton.background = 'green';
-  recomputeButton.top = '10px';
-  recomputeButton.left = '10px';
+  recomputeButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  recomputeButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+  recomputeButton.top = '1%';
+  recomputeButton.left = '-220px'; // Position from right edge (button width + gap)
   recomputeButton.onPointerClickObservable.add(() => {
     if (WASM_BABYLON_CHUNKS.wasmModule) {
       // Clear last user prompt since this is not from text-to-layout generation
@@ -3937,27 +3939,31 @@ export const init = async (): Promise<void> => {
   });
   advancedTexture.addControl(recomputeButton);
   
-  // Fullscreen button
+  // Fullscreen button - positioned top right using percentage-based alignment
   const fullscreenButton = Button.CreateSimpleButton('fullscreenButton', 'Fullscreen');
   fullscreenButton.width = '150px';
   fullscreenButton.height = '40px';
   fullscreenButton.color = 'white';
   fullscreenButton.background = 'blue';
-  fullscreenButton.top = '10px';
-  fullscreenButton.left = '220px';
+  fullscreenButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  fullscreenButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+  fullscreenButton.top = '1%';
+  fullscreenButton.left = '-10px'; // Position from right edge
   fullscreenButton.onPointerClickObservable.add(() => {
     engine.enterFullscreen(false);
   });
   advancedTexture.addControl(fullscreenButton);
   
-  // Exit fullscreen button (initially hidden)
+  // Exit fullscreen button (initially hidden) - positioned top right using percentage-based alignment
   const exitFullscreenButton = Button.CreateSimpleButton('exitFullscreenButton', 'Exit Fullscreen');
   exitFullscreenButton.width = '150px';
   exitFullscreenButton.height = '40px';
   exitFullscreenButton.color = 'white';
   exitFullscreenButton.background = 'red';
-  exitFullscreenButton.top = '10px';
-  exitFullscreenButton.left = '220px';
+  exitFullscreenButton.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  exitFullscreenButton.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+  exitFullscreenButton.top = '1%';
+  exitFullscreenButton.left = '-10px'; // Position from right edge
   exitFullscreenButton.isVisible = false;
   exitFullscreenButton.onPointerClickObservable.add(() => {
     engine.exitFullscreen();
