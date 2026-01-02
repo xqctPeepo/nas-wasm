@@ -3200,10 +3200,6 @@ export const init = async (): Promise<void> => {
     }
     
     WASM_BABYLON_CHUNKS.wasmModule = wasmModule;
-    
-    // Set up JavaScript random function for WASM
-    const globalObj: { [key: string]: unknown } = globalThis;
-    globalObj.js_random = (): number => Math.random();
   } catch (error) {
     if (errorEl) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';

@@ -1,4 +1,5 @@
 use wasm_bindgen::prelude::*;
+use js_sys::Math;
 use std::sync::{LazyLock, Mutex};
 use std::collections::{HashMap, HashSet, BinaryHeap};
 use std::cmp::Ordering;
@@ -801,7 +802,7 @@ pub fn generate_voronoi_regions(
     // Helper to get a random hex coordinate from the grid
     let get_random_hex = || {
         if hex_count > 0 {
-            let index = (js_random() * hex_count as f64) as usize;
+            let index = (Math::random() * hex_count as f64) as usize;
             if index < hex_count {
                 Some(hex_vec[index])
             } else {
@@ -846,7 +847,7 @@ pub fn generate_voronoi_regions(
     }
     
     // If no seeds were generated, return empty array
-    // This can happen if js_random fails or if seed counts are 0
+    // This can happen if seed counts are 0
     if seeds.is_empty() {
         return "[]".to_string();
     }
@@ -1254,14 +1255,4 @@ pub fn generate_road_network_growing_tree(
     format!("[{}]", json_parts.join(","))
 }
 
-/// JavaScript random number generator
-/// 
-/// **Learning Point**: WASM can't generate random numbers directly, so we
-/// call back to JavaScript's Math.random(). This is set up in the TypeScript code.
-/// The function is attached to globalThis in the TypeScript route handler.
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_name = "js_random")]
-    fn js_random() -> f64;
-}
 
