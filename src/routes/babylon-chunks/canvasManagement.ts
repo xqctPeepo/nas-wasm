@@ -113,9 +113,10 @@ export class CanvasManager {
   private baseMeshes: Map<string, Mesh> = new Map();
   private materials: Map<TileType['type'], StandardMaterial> = new Map();
   private currentRings = 1;
+  private baseRings = 1; // Fixed rings value for chunk creation (never changes)
   private wasmManager: WasmManager;
   private logFn: ((message: string, type?: 'info' | 'success' | 'warning' | 'error') => void) | null;
-  private generatePreConstraintsFn: ((constraints: LayoutConstraints, worldMap?: WorldMap, chunksToGenerate?: Array<Chunk>) => Array<{ q: number; r: number; tileType: TileType }>) | null = null;
+  private generatePreConstraintsFn: ((constraints: LayoutConstraints, worldMap?: WorldMap, chunksToGenerate?: Array<Chunk>) => Promise<Array<{ q: number; r: number; tileType: TileType }>>) | null = null;
   private worldMap: WorldMap | null = null;
   private isTestMode: boolean = false;
   private currentTileText: TextBlock | null = null;
@@ -124,11 +125,12 @@ export class CanvasManager {
   private player: { getAvatar: () => { getMesh: () => Mesh | null } } | null = null;
   private floatingOriginThreshold: number = 1000; // Distance threshold for floating origin updates
   private currentFloatingOrigin: Vector3 = Vector3.Zero(); // Current floating origin position
+  private worldHexOffset: { q: number; r: number } = { q: 0, r: 0 }; // Accumulated hex offset from floating origin shifts
 
   constructor(
     wasmManager: WasmManager,
     logFn?: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void,
-    generatePreConstraintsFn?: (constraints: LayoutConstraints, worldMap?: WorldMap, chunksToGenerate?: Array<Chunk>) => Array<{ q: number; r: number; tileType: TileType }>,
+    generatePreConstraintsFn?: (constraints: LayoutConstraints, worldMap?: WorldMap, chunksToGenerate?: Array<Chunk>) => Promise<Array<{ q: number; r: number; tileType: TileType }>>,
     isTestMode?: boolean
   ) {
     this.wasmManager = wasmManager;
@@ -149,7 +151,7 @@ export class CanvasManager {
   /**
    * Set the function to generate pre-constraints
    */
-  setGeneratePreConstraintsFn(fn: (constraints: LayoutConstraints, worldMap?: WorldMap, chunksToGenerate?: Array<Chunk>) => Array<{ q: number; r: number; tileType: TileType }>): void {
+  setGeneratePreConstraintsFn(fn: (constraints: LayoutConstraints, worldMap?: WorldMap, chunksToGenerate?: Array<Chunk>) => Promise<Array<{ q: number; r: number; tileType: TileType }>>): void {
     this.generatePreConstraintsFn = fn;
   }
 
@@ -169,9 +171,30 @@ export class CanvasManager {
 
   /**
    * Set current rings
+   * When setting to a new base value (not temporary), also update baseRings
+   * baseRings should only be updated for reasonable chunk sizes, not huge values from pre-constraint generation
    */
   setCurrentRings(rings: number): void {
     this.currentRings = rings;
+    // Only update baseRings if:
+    // 1. It's a reasonable chunk size (<= 20) - prevents huge values like 31, 94
+    // 2. Either baseRings is still at default (1) OR the new value isn't a huge jump
+    // This prevents baseRings from being corrupted by large requiredRings values
+    const isReasonableSize = rings <= 20;
+    const isInitialSet = this.baseRings === 1;
+    const isNotHugeJump = rings <= this.baseRings * 2;
+    
+    if (isReasonableSize && (isInitialSet || isNotHugeJump)) {
+      this.baseRings = rings;
+    }
+  }
+
+  /**
+   * Get base rings (for chunk creation - fixed value)
+   * This is the actual rings value chunks should use, not the dynamically calculated one
+   */
+  getBaseRings(): number {
+    return this.baseRings;
   }
 
   /**
@@ -487,7 +510,7 @@ export class CanvasManager {
     recomputeButton.top = '1%';
     recomputeButton.left = '-220px';
     recomputeButton.onPointerClickObservable.add(() => {
-      this.renderGrid();
+      this.renderGrid(undefined, true);
     });
     advancedTexture.addControl(recomputeButton);
     
@@ -661,9 +684,20 @@ export class CanvasManager {
 
   /**
    * Render the WFC grid
+   * @param constraints - Optional layout constraints to use for generation
+   * @param forceRecompute - If true, recompute tile types for all existing chunks
    */
-  renderGrid(constraints?: LayoutConstraints): void {
-    
+  renderGrid(constraints?: LayoutConstraints, forceRecompute?: boolean): void {
+    // Start async rendering process
+    void this.renderGridAsync(constraints, forceRecompute);
+  }
+
+  /**
+   * Internal async method for rendering the WFC grid
+   * @param constraints - Optional layout constraints to use for generation
+   * @param forceRecompute - If true, recompute tile types for all existing chunks
+   */
+  private async renderGridAsync(constraints?: LayoutConstraints, forceRecompute?: boolean): Promise<void> {
     const wasmModule = this.wasmManager.getModule();
     if (!wasmModule) {
       return;
@@ -676,6 +710,16 @@ export class CanvasManager {
       const enabledChunks = this.worldMap.getEnabledChunks();
       
       if (enabledChunks.length > 0) {
+        // If forceRecompute is true, mark all chunks as needing regeneration
+        if (forceRecompute) {
+          for (const chunk of enabledChunks) {
+            chunk.setTilesGenerated(false);
+          }
+          if (this.logFn) {
+            this.log(`Force recompute: marked all ${enabledChunks.length} chunks for regeneration`, 'info');
+          }
+        }
+        
         // Separate chunks into those that need generation and those that are already generated
         const chunksNeedingGeneration: Array<Chunk> = [];
         const chunksAlreadyGenerated: Array<Chunk> = [];
@@ -748,16 +792,24 @@ export class CanvasManager {
           this.log(`Max distance from origin: ${maxDistanceFromOrigin}, required rings: ${requiredRings}`, 'info');
         }
         
-        // Only generate layout for new chunks that need generation
-        // Existing chunks maintain their cached tile composition
+        // Generate layout for chunks that need generation
+        // When forceRecompute is true, all chunks are treated as needing generation
         if (chunksNeedingGeneration.length > 0) {
-          // Generate pre-constraints only for new chunks
+          // Generate pre-constraints for chunks that need generation
           if (this.generatePreConstraintsFn) {
-            // Only clear pre-constraints for new hex coordinates
-            // Keep existing pre-constraints to maintain existing chunk composition
-            // Temporarily override rings to cover all chunks
+            // When forceRecompute is true, clear all pre-constraints and regenerate for all chunks
+            // Otherwise, only set pre-constraints for new chunks
+            if (forceRecompute) {
+              wasmModule.clear_pre_constraints();
+              if (this.logFn) {
+                this.log('Force recompute: cleared all pre-constraints', 'info');
+              }
+            }
+            
+            // Generate constraints with expanded area for pre-constraint generation
+            // IMPORTANT: Save original rings and restore immediately after async call
+            // Chunks must always use the fixed rings value, not the dynamically calculated requiredRings
             const originalRings = this.currentRings;
-            this.currentRings = requiredRings;
             
             // Generate constraints with expanded area
             const expandedConstraints: LayoutConstraints = {
@@ -765,17 +817,27 @@ export class CanvasManager {
               rings: requiredRings,
             };
             
-            const preConstraints = this.generatePreConstraintsFn(expandedConstraints, this.worldMap, chunksNeedingGeneration);
+            const preConstraints = await this.generatePreConstraintsFn(expandedConstraints, this.worldMap, chunksNeedingGeneration);
+            
+            // CRITICAL: Restore original rings immediately after async call
+            // This prevents the changed rings value from affecting chunk creation
+            this.currentRings = originalRings;
             
             if (this.logFn) {
-              this.log(`Generated ${preConstraints.length} pre-constraints for ${chunksNeedingGeneration.length} new chunks`, 'info');
+              if (forceRecompute) {
+                this.log(`Force recompute: generated ${preConstraints.length} pre-constraints for all ${chunksNeedingGeneration.length} chunks`, 'info');
+              } else {
+                this.log(`Generated ${preConstraints.length} pre-constraints for ${chunksNeedingGeneration.length} new chunks`, 'info');
+              }
             }
             
-            // Filter to only include hexes that are in new chunks
+            // When forceRecompute is true, set pre-constraints for ALL hex coordinates
+            // Otherwise, only set pre-constraints for new chunks
+            const hexCoordsToProcess = forceRecompute ? allHexCoords : newHexCoords;
             let setCount = 0;
             for (const preConstraint of preConstraints) {
               const hexKey = `${preConstraint.q},${preConstraint.r}`;
-              if (newHexCoords.has(hexKey)) {
+              if (hexCoordsToProcess.has(hexKey)) {
                 const tileNum = tileTypeToNumber(preConstraint.tileType);
                 wasmModule.set_pre_constraint(preConstraint.q, preConstraint.r, tileNum);
                 setCount++;
@@ -783,18 +845,30 @@ export class CanvasManager {
             }
             
             if (this.logFn) {
-              this.log(`Set ${setCount} pre-constraints for new chunk tiles`, 'info');
+              if (forceRecompute) {
+                this.log(`Set ${setCount} pre-constraints for all chunk tiles`, 'info');
+              } else {
+                this.log(`Set ${setCount} pre-constraints for new chunk tiles`, 'info');
+              }
             }
             
-            // Restore original rings
+            // Ensure currentRings is still the original value (should already be restored above)
             this.currentRings = originalRings;
           }
           
-          // Generate layout only for new chunks
+          // Generate layout - this recomputes tile types based on pre-constraints
           wasmModule.generate_layout();
           
+          if (this.logFn) {
+            if (forceRecompute) {
+              this.log('Force recompute: regenerated layout for all chunks', 'info');
+            }
+          }
+          
           // Cache tile types in chunks that were just generated
-          for (const chunk of chunksNeedingGeneration) {
+          // When forceRecompute is true, update ALL chunks
+          const chunksToUpdate = forceRecompute ? enabledChunks : chunksNeedingGeneration;
+          for (const chunk of chunksToUpdate) {
             const chunkGrid = chunk.getGrid();
             for (const chunkTile of chunkGrid) {
               // Query WASM for tile type and cache it in the chunk
@@ -809,7 +883,11 @@ export class CanvasManager {
             
             if (this.logFn) {
               const chunkPos = chunk.getPositionHex();
-              this.log(`Cached tile composition for chunk at (${chunkPos.q}, ${chunkPos.r})`, 'info');
+              if (forceRecompute) {
+                this.log(`Force recompute: updated tile composition for chunk at (${chunkPos.q}, ${chunkPos.r})`, 'info');
+              } else {
+                this.log(`Cached tile composition for chunk at (${chunkPos.q}, ${chunkPos.r})`, 'info');
+              }
             }
           }
         } else {
@@ -823,7 +901,7 @@ export class CanvasManager {
       // Original single-grid pre-constraint generation
       if (!constraints && this.generatePreConstraintsFn) {
         wasmModule.clear_pre_constraints();
-        const preConstraints = this.generatePreConstraintsFn(constraintsToUse, this.worldMap ?? undefined);
+        const preConstraints = await this.generatePreConstraintsFn(constraintsToUse, this.worldMap ?? undefined);
         for (const preConstraint of preConstraints) {
           const tileNum = tileTypeToNumber(preConstraint.tileType);
           wasmModule.set_pre_constraint(preConstraint.q, preConstraint.r, tileNum);
@@ -831,7 +909,7 @@ export class CanvasManager {
       } else if (constraints && this.generatePreConstraintsFn) {
         // If constraints are provided, still generate pre-constraints
         wasmModule.clear_pre_constraints();
-        const preConstraints = this.generatePreConstraintsFn(constraints, this.worldMap ?? undefined);
+        const preConstraints = await this.generatePreConstraintsFn(constraints, this.worldMap ?? undefined);
         for (const preConstraint of preConstraints) {
           const tileNum = tileTypeToNumber(preConstraint.tileType);
           wasmModule.set_pre_constraint(preConstraint.q, preConstraint.r, tileNum);
@@ -1215,11 +1293,29 @@ export class CanvasManager {
             continue;
           }
           
+          // Check if instance exists and if it needs to be recreated (tile type changed)
+          const hadExistingInstance = chunkTile.meshInstance !== null;
+          let instanceNeedsRecreate = false;
+          if (chunkTile.meshInstance) {
+            // Check if the instance's source mesh matches the new tile type's base mesh
+            const instanceSourceMesh = chunkTile.meshInstance.sourceMesh;
+            if (instanceSourceMesh !== tileTypeBaseMesh) {
+              // Tile type changed - need to recreate instance with new base mesh
+              chunkTile.meshInstance.dispose();
+              chunkTile.meshInstance = null;
+              instanceNeedsRecreate = true;
+            }
+          }
+          
           // Create instance if it doesn't exist
           if (!chunkTile.meshInstance) {
             const instanceName = `tile_${chunkTile.hex.q}_${chunkTile.hex.r}`;
             chunkTile.meshInstance = tileTypeBaseMesh.createInstance(instanceName);
-            instancesCreated++;
+            if (!hadExistingInstance) {
+              instancesCreated++;
+            } else {
+              instancesUpdated++;
+            }
           }
           
           // Update instance position
@@ -1230,7 +1326,11 @@ export class CanvasManager {
           // Ensure instance is visible and enabled
           instance.isVisible = true;
           instance.setEnabled(true);
-          instancesUpdated++;
+          
+          // Count as updated if instance already existed and wasn't recreated
+          if (hadExistingInstance && !instanceNeedsRecreate) {
+            instancesUpdated++;
+          }
         }
       }
       
@@ -1369,6 +1469,16 @@ export class CanvasManager {
       // Calculate offset to shift all meshes (clone to avoid mutating avatarPosition)
       const offset = avatarPosition.clone().subtract(this.currentFloatingOrigin);
       
+      // Calculate hex offset for this shift to maintain world hex coordinate accuracy
+      // Convert the world offset to hex coordinates using TILE_CONFIG.hexSize
+      // This tracks how many hexes the floating origin has shifted
+      const hexOffset = HexUtils.HEX_UTILS.worldToHex(offset.x, offset.z, TILE_CONFIG.hexSize);
+      
+      // Accumulate hex offset (add to existing offset)
+      // This maintains the true world hex coordinate even after floating origin shifts
+      this.worldHexOffset.q += hexOffset.q;
+      this.worldHexOffset.r += hexOffset.r;
+      
       // Shift all meshes in the scene to maintain precision
       // This effectively moves the world coordinate system to keep player near origin
       // All meshes including the avatar are shifted to maintain relative positions
@@ -1392,9 +1502,17 @@ export class CanvasManager {
       this.currentFloatingOrigin = avatarPosition.clone();
       
       if (this.logFn) {
-        this.log(`Floating origin updated to player position: (${this.currentFloatingOrigin.x.toFixed(2)}, ${this.currentFloatingOrigin.y.toFixed(2)}, ${this.currentFloatingOrigin.z.toFixed(2)})`, 'info');
+        this.log(`Floating origin updated to player position: (${this.currentFloatingOrigin.x.toFixed(2)}, ${this.currentFloatingOrigin.y.toFixed(2)}, ${this.currentFloatingOrigin.z.toFixed(2)}), hex offset: (${this.worldHexOffset.q}, ${this.worldHexOffset.r})`, 'info');
       }
     }
+  }
+
+  /**
+   * Get the world hex offset accumulated from floating origin shifts
+   * This offset must be added to local hex coordinates to get true world hex coordinates
+   */
+  getWorldHexOffset(): { q: number; r: number } {
+    return { q: this.worldHexOffset.q, r: this.worldHexOffset.r };
   }
 
   /**

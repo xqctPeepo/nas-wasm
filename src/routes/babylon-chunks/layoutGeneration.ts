@@ -338,16 +338,25 @@ export async function parseLayoutConstraints(
  * - Road connectivity validation
  * - Road and building placement restricted to grass/forest (not water)
  * - Buildings must be adjacent to at least one road
+ * 
+ * This function is async to avoid blocking the main thread during generation.
  */
-export function constraintsToPreConstraints(
+export async function constraintsToPreConstraints(
   constraints: LayoutConstraints,
   wasmModule: WasmModuleBabylonChunks,
   currentRings: number,
   setCurrentRings: (rings: number) => void,
   logFn?: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void
-): Array<{ q: number; r: number; tileType: TileType }> {
+): Promise<Array<{ q: number; r: number; tileType: TileType }>> {
   const rings = constraints.rings ?? currentRings;
   setCurrentRings(rings);
+  
+  // Yield control before starting heavy computation
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      resolve();
+    });
+  });
   
   const centerQ = 0;
   const centerR = 0;
@@ -413,6 +422,13 @@ export function constraintsToPreConstraints(
     );
     
     voronoiJson = typeof result === 'string' ? result : '[]';
+    
+    // Yield control after WASM call
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        resolve();
+      });
+    });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     if (logFn) {
@@ -548,6 +564,13 @@ export function constraintsToPreConstraints(
     occupiedJson,
     targetRoadCount
   );
+  
+  // Yield control after WASM road generation
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      resolve();
+    });
+  });
   
   const parsedRoads = HexUtils.parseHexCoordArray(result);
   if (parsedRoads) {
@@ -710,6 +733,13 @@ export function constraintsToPreConstraints(
     }
   }
 
+  // Yield control after building generation
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      resolve();
+    });
+  });
+
   // Step 5: Fill remaining tiles with grass
   const allConstraints = [...voronoiConstraints, ...buildingConstraints, ...roadConstraints];
   const finalOccupied = new Set<string>();
@@ -718,10 +748,24 @@ export function constraintsToPreConstraints(
   }
 
   const grassConstraints: Array<{ q: number; r: number; tileType: TileType }> = [];
-  for (const hex of hexGrid) {
-    const hexKey = `${hex.q},${hex.r}`;
-    if (!finalOccupied.has(hexKey)) {
-      grassConstraints.push({ q: hex.q, r: hex.r, tileType: { type: 'grass' } });
+  // Process grass constraints in batches to avoid blocking
+  const BATCH_SIZE = 500;
+  for (let i = 0; i < hexGrid.length; i += BATCH_SIZE) {
+    const batch = hexGrid.slice(i, Math.min(i + BATCH_SIZE, hexGrid.length));
+    for (const hex of batch) {
+      const hexKey = `${hex.q},${hex.r}`;
+      if (!finalOccupied.has(hexKey)) {
+        grassConstraints.push({ q: hex.q, r: hex.r, tileType: { type: 'grass' } });
+      }
+    }
+    
+    // Yield control if not last batch
+    if (i + BATCH_SIZE < hexGrid.length) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
     }
   }
 
@@ -788,7 +832,7 @@ export async function generateLayoutFromText(
     }
 
     wasmModule.clear_pre_constraints();
-    const preConstraints = constraintsToPreConstraints(
+    const preConstraints = await constraintsToPreConstraints(
       constraints,
       wasmModule,
       canvasManager.getCurrentRings(),

@@ -123,20 +123,62 @@ export const HEX_UTILS = {
    * @returns Hex coordinate {q, r} containing the world point
    */
   worldToHex(x: number, z: number, hexSize: number): HexCoord {
+    // Validate inputs to prevent overflow/infinity errors
+    // Clamp very large values to prevent precision loss
+    const MAX_SAFE_COORD = 1e6; // Maximum safe coordinate value
+    const clampedX = Math.max(-MAX_SAFE_COORD, Math.min(MAX_SAFE_COORD, x));
+    const clampedZ = Math.max(-MAX_SAFE_COORD, Math.min(MAX_SAFE_COORD, z));
+    
+    // Check for invalid values (NaN, Infinity)
+    if (!Number.isFinite(clampedX) || !Number.isFinite(clampedZ)) {
+      return { q: 0, r: 0 };
+    }
+    
     hexSize = hexSize / 1.34;
+    
+    // Validate hexSize to prevent division by zero or very small values
+    if (!Number.isFinite(hexSize) || hexSize <= 0 || hexSize < 0.001) {
+      return { q: 0, r: 0 };
+    }
+    
     // 1. Convert world coordinates to fractional axial coordinates
     // Inverse of hexToWorld: x = hexSize * sqrt(3) * (2q + r), z = hexSize * 3 * r
     // Solving: r = z / (3 * hexSize), q = (x / (hexSize * sqrt(3)) - r) / 2
-    const fracQ = x / (2 * hexSize * Math.sqrt(3)) - z / (6 * hexSize);
-    const fracR = z / (3 * hexSize);
+    const sqrt3 = Math.sqrt(3);
+    const denominatorQ = 2 * hexSize * sqrt3;
+    const denominatorR = 3 * hexSize;
+    
+    // Check for division by zero or very small denominators
+    if (!Number.isFinite(denominatorQ) || !Number.isFinite(denominatorR) || 
+        Math.abs(denominatorQ) < 0.001 || Math.abs(denominatorR) < 0.001) {
+      return { q: 0, r: 0 };
+    }
+    
+    const fracQ = clampedX / denominatorQ - clampedZ / (6 * hexSize);
+    const fracR = clampedZ / denominatorR;
+    
+    // Validate fractional coordinates
+    if (!Number.isFinite(fracQ) || !Number.isFinite(fracR)) {
+      return { q: 0, r: 0 };
+    }
     
     // 2. Convert to fractional cube coordinates
     const fracS = -fracQ - fracR;
+    
+    // Validate fracS
+    if (!Number.isFinite(fracS)) {
+      return { q: 0, r: 0 };
+    }
     
     // 3. Round fractional cube coordinates to the nearest integer hex
     let q = Math.round(fracQ);
     let r = Math.round(fracR);
     let s = Math.round(fracS);
+    
+    // Validate rounded coordinates
+    if (!Number.isFinite(q) || !Number.isFinite(r) || !Number.isFinite(s)) {
+      return { q: 0, r: 0 };
+    }
     
     // 4. Calculate rounding differences
     const qDiff = Math.abs(q - fracQ);
@@ -151,6 +193,11 @@ export const HEX_UTILS = {
       r = -q - s;
     } else {
       s = -q - r;
+    }
+    
+    // Final validation
+    if (!Number.isFinite(q) || !Number.isFinite(r)) {
+      return { q: 0, r: 0 };
     }
     
     // Return as axial coordinates (q, r)

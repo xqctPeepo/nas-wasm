@@ -21,9 +21,10 @@ import { PatternCacheManager } from './babylon-chunks/dbManagement';
 import { LlmManager } from './babylon-chunks/llmManagement';
 import { CanvasManager } from './babylon-chunks/canvasManagement';
 import { generateLayoutFromText, constraintsToPreConstraints } from './babylon-chunks/layoutGeneration';
-import { WorldMap, getChunkForTile, calculateChunkRadius } from './babylon-chunks/chunkManagement';
+import { WorldMap, getChunkForTile } from './babylon-chunks/chunkManagement';
 import { TILE_CONFIG } from './babylon-chunks/canvasManagement';
 import { Player } from './babylon-chunks/player';
+import { ChunkGenerationQueue } from './babylon-chunks/chunkGenerationQueue';
 import * as HexUtils from './babylon-chunks/hexUtils';
 
 /**
@@ -53,116 +54,97 @@ interface NearestNeighborResult {
 }
 
 /**
- * Calculate chunk neighbor positions given a center and rings
- * Uses the same logic as Chunk.calculateChunkNeighbors but as a standalone function
- */
-function calculateChunkNeighbors(center: HexUtils.HexCoord, rings: number): Array<HexUtils.HexCoord> {
-  const neighbors: Array<HexUtils.HexCoord> = [];
-  
-  // Base offset vector: (rings, rings+1) for rings>0, or (1, 0) for rings=0
-  let offsetQ: number;
-  let offsetR: number;
-  if (rings === 0) {
-    offsetQ = 1;
-    offsetR = 0;
-  } else {
-    offsetQ = rings;
-    offsetR = rings + 1;
-  }
-  
-  // Rotate the starting offset by -120 degrees (4 steps clockwise) to correct angular alignment
-  // This compensates for the 120-degree offset in the coordinate system
-  let currentQ = offsetQ;
-  let currentR = offsetR;
-  for (let i = 0; i < 4; i++) {
-    const nextQ = currentQ + currentR;
-    const nextR = -currentQ;
-    currentQ = nextQ;
-    currentR = nextR;
-  }
-  
-  // Rotate the offset vector 60 degrees clockwise 6 times
-  // Rotation formula in axial coordinates for clockwise: (q, r) -> (q+r, -q)
-  // Note: Using clockwise rotation for right-handed coordinate system (BabylonJS)
-  
-  for (let i = 0; i < 6; i++) {
-    // Add the current offset to the center
-    neighbors.push({ q: center.q + currentQ, r: center.r + currentR });
-    
-      // Rotate 60 degrees clockwise: (q, r) -> (q+r, -q)
-      const nextQ = currentQ + currentR;
-      const nextR = -currentQ;
-    currentQ = nextQ;
-    currentR = nextR;
-  }
-
-  return neighbors;
-}
-
-/**
  * Find the immediate neighbor chunk of the current chunk that is nearest to the current tile
  * Only considers the 6 immediate neighbors of the current chunk
+ * Uses WASM for computation
  * @param currentChunkHex - Hex coordinate of current chunk
  * @param worldMap - World map instance
  * @param currentTileHex - Hex coordinate of current tile
  * @param rings - Number of rings per chunk (needed for chunk spacing calculation)
+ * @param wasmModule - WASM module instance
  * @returns Nearest neighbor chunk info, or null if no neighbor found
  */
 function findNearestNeighborChunk(
   currentChunkHex: HexUtils.HexCoord,
   worldMap: WorldMap,
   currentTileHex: HexUtils.HexCoord,
-  rings: number
+  rings: number,
+  wasmModule: { find_nearest_neighbor_chunk: (current_chunk_q: number, current_chunk_r: number, current_tile_q: number, current_tile_r: number, rings: number, existing_chunks_json: string) => string }
 ): NearestNeighborResult | null {
-  // Get the 6 immediate neighbors of the current chunk
-  const immediateNeighbors = calculateChunkNeighbors(currentChunkHex, rings);
+  // Build existing chunks JSON - only include chunks that are fully in the map
+  // (Placeholder chunks added by the queue are already in the map, so they'll be included)
+  const allChunks = worldMap.getAllChunks();
+  const existingChunks: Array<{ q: number; r: number }> = [];
+  for (const chunk of allChunks) {
+    const pos = chunk.getPositionHex();
+    existingChunks.push({ q: pos.q, r: pos.r });
+  }
   
-  if (immediateNeighbors.length === 0) {
-    return null;
-  }
-
-  let nearestNeighbor: HexUtils.HexCoord | null = null;
-  let minDistance = Number.POSITIVE_INFINITY;
-
-  // Find which of the immediate neighbors is closest to the current tile (in hex distance)
-  for (const neighborPos of immediateNeighbors) {
-    const hexDistance = HexUtils.HEX_UTILS.distance(
-      currentTileHex.q,
-      currentTileHex.r,
-      neighborPos.q,
-      neighborPos.r
-    );
-
-    if (hexDistance < minDistance) {
-      minDistance = hexDistance;
-      nearestNeighbor = neighborPos;
-    }
-  }
-
-  if (!nearestNeighbor) {
-    return null;
-  }
-
-  // Convert hex distance to world distance for the return value
-  const neighborWorldPos = HexUtils.HEX_UTILS.hexToWorld(
-    nearestNeighbor.q,
-    nearestNeighbor.r,
-    TILE_CONFIG.hexSize
-  );
-  const tileWorldPos = HexUtils.HEX_UTILS.hexToWorld(
+  const existingChunksJson = JSON.stringify(existingChunks);
+  
+  // Call WASM function
+  const resultJson = wasmModule.find_nearest_neighbor_chunk(
+    currentChunkHex.q,
+    currentChunkHex.r,
     currentTileHex.q,
     currentTileHex.r,
-    TILE_CONFIG.hexSize
+    rings,
+    existingChunksJson
   );
-  const dx = tileWorldPos.x - neighborWorldPos.x;
-  const dz = tileWorldPos.z - neighborWorldPos.z;
-  const worldDistance = Math.sqrt(dx * dx + dz * dz);
-
-  return {
-    neighbor: nearestNeighbor,
-    distance: worldDistance,
-    isInstantiated: worldMap.hasChunk(nearestNeighbor),
-  };
+  
+  if (resultJson === 'null' || resultJson === '') {
+    return null;
+  }
+  
+  try {
+    const parsed: unknown = JSON.parse(resultJson);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const neighborDesc = Object.getOwnPropertyDescriptor(parsed, 'neighbor');
+      const distanceDesc = Object.getOwnPropertyDescriptor(parsed, 'distance');
+      const isInstantiatedDesc = Object.getOwnPropertyDescriptor(parsed, 'isInstantiated');
+      
+      if (neighborDesc && distanceDesc && isInstantiatedDesc && 
+          'value' in neighborDesc && 'value' in distanceDesc && 'value' in isInstantiatedDesc) {
+        const neighborValue: unknown = neighborDesc.value;
+        const distanceValue: unknown = distanceDesc.value;
+        const isInstantiatedValue: unknown = isInstantiatedDesc.value;
+        
+        if (typeof neighborValue === 'object' && neighborValue !== null && !Array.isArray(neighborValue)) {
+          const neighborQDesc = Object.getOwnPropertyDescriptor(neighborValue, 'q');
+          const neighborRDesc = Object.getOwnPropertyDescriptor(neighborValue, 'r');
+          
+          if (neighborQDesc && neighborRDesc && 'value' in neighborQDesc && 'value' in neighborRDesc) {
+            const qValue: unknown = neighborQDesc.value;
+            const rValue: unknown = neighborRDesc.value;
+            
+            if (typeof qValue === 'number' && typeof rValue === 'number' &&
+                typeof distanceValue === 'number' && typeof isInstantiatedValue === 'boolean') {
+              // Convert hex distance to world distance
+              const neighborWorldPos = HexUtils.HEX_UTILS.hexToWorld(qValue, rValue, TILE_CONFIG.hexSize);
+              const tileWorldPos = HexUtils.HEX_UTILS.hexToWorld(
+                currentTileHex.q,
+                currentTileHex.r,
+                TILE_CONFIG.hexSize
+              );
+              const dx = tileWorldPos.x - neighborWorldPos.x;
+              const dz = tileWorldPos.z - neighborWorldPos.z;
+              const worldDistance = Math.sqrt(dx * dx + dz * dz);
+              
+              return {
+                neighbor: { q: qValue, r: rValue },
+                distance: worldDistance,
+                isInstantiated: isInstantiatedValue,
+              };
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // If parsing fails, return null
+  }
+  
+  return null;
 }
 
 /**
@@ -185,9 +167,11 @@ const distanceCheckCache: DistanceCheckCache = {
  * Disable chunks that are more than 4 chunk radius away from the current chunk
  * All chunks, including the origin chunk, are subject to the distance threshold
  * Uses caching to avoid recalculating when current chunk hasn't changed
+ * Uses WASM for distance computation
  * @param currentChunkHex - Hex coordinate of current chunk
  * @param worldMap - World map instance
  * @param rings - Number of rings per chunk
+ * @param wasmModule - WASM module instance
  * @param logFn - Optional logging function
  * @returns true if any chunks were disabled or re-enabled, false otherwise
  */
@@ -195,9 +179,10 @@ function disableDistantChunks(
   currentChunkHex: HexUtils.HexCoord,
   worldMap: WorldMap,
   rings: number,
+  wasmModule: { calculate_chunk_radius: (rings: number) => number; disable_distant_chunks: (current_chunk_q: number, current_chunk_r: number, all_chunks_json: string, max_distance: number) => string },
   logFn?: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void
 ): boolean {
-  const maxDistance = 4 * calculateChunkRadius(rings);
+  const maxDistance = 4 * wasmModule.calculate_chunk_radius(rings);
   const allChunks = worldMap.getAllChunks();
   const currentChunkCount = allChunks.length;
   
@@ -219,40 +204,97 @@ function disableDistantChunks(
   distanceCheckCache.maxDistance = maxDistance;
   distanceCheckCache.lastChunkCount = currentChunkCount;
   
+  // Build chunks JSON with enabled state
+  const chunksJson: Array<{ q: number; r: number; enabled: boolean }> = [];
+  for (const chunk of allChunks) {
+    const pos = chunk.getPositionHex();
+    chunksJson.push({ q: pos.q, r: pos.r, enabled: chunk.getEnabled() });
+  }
+  const allChunksJson = JSON.stringify(chunksJson);
+  
+  // Call WASM function
+  const resultJson = wasmModule.disable_distant_chunks(
+    currentChunkHex.q,
+    currentChunkHex.r,
+    allChunksJson,
+    maxDistance
+  );
+  
   let disabledCount = 0;
   let reEnabledCount = 0;
-
-  for (const chunk of allChunks) {
-    const chunkPos = chunk.getPositionHex();
-    
-    // Early exit: if chunk is already disabled and we're checking the same chunk,
-    // we can skip distance calculation for chunks that were already beyond threshold
-    // However, we still need to check in case they moved back into range
-    const distance = HexUtils.HEX_UTILS.distance(
-      currentChunkHex.q,
-      currentChunkHex.r,
-      chunkPos.q,
-      chunkPos.r
-    );
-
-    if (distance > maxDistance) {
-      if (chunk.getEnabled()) {
-        chunk.setEnabled(false);
-        disabledCount++;
-        if (logFn) {
-          logFn(`Disabled distant chunk at (${chunkPos.q}, ${chunkPos.r}) - distance: ${distance.toFixed(2)}, max: ${maxDistance.toFixed(2)}`, 'info');
+  
+  try {
+    const parsed: unknown = JSON.parse(resultJson);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const toDisableDesc = Object.getOwnPropertyDescriptor(parsed, 'toDisable');
+      const toEnableDesc = Object.getOwnPropertyDescriptor(parsed, 'toEnable');
+      
+      if (toDisableDesc && 'value' in toDisableDesc && Array.isArray(toDisableDesc.value)) {
+        for (const item of toDisableDesc.value) {
+          if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+            const qDesc = Object.getOwnPropertyDescriptor(item, 'q');
+            const rDesc = Object.getOwnPropertyDescriptor(item, 'r');
+            
+            if (qDesc && rDesc && 'value' in qDesc && 'value' in rDesc) {
+              const qValue: unknown = qDesc.value;
+              const rValue: unknown = rDesc.value;
+              
+              if (typeof qValue === 'number' && typeof rValue === 'number') {
+                const chunk = worldMap.getChunk({ q: qValue, r: rValue });
+                if (chunk && chunk.getEnabled()) {
+                  chunk.setEnabled(false);
+                  disabledCount++;
+                  if (logFn) {
+                    const chunkPos = chunk.getPositionHex();
+                    const distance = HexUtils.HEX_UTILS.distance(
+                      currentChunkHex.q,
+                      currentChunkHex.r,
+                      chunkPos.q,
+                      chunkPos.r
+                    );
+                    logFn(`Disabled distant chunk at (${chunkPos.q}, ${chunkPos.r}) - distance: ${distance.toFixed(2)}, max: ${maxDistance.toFixed(2)}`, 'info');
+                  }
+                }
+              }
+            }
+          }
         }
       }
-    } else {
-      // Re-enable chunks that are within range
-      if (!chunk.getEnabled()) {
-        chunk.setEnabled(true);
-        reEnabledCount++;
-        if (logFn) {
-          logFn(`Re-enabled chunk at (${chunkPos.q}, ${chunkPos.r}) - distance: ${distance.toFixed(2)}`, 'info');
+      
+      if (toEnableDesc && 'value' in toEnableDesc && Array.isArray(toEnableDesc.value)) {
+        for (const item of toEnableDesc.value) {
+          if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+            const qDesc = Object.getOwnPropertyDescriptor(item, 'q');
+            const rDesc = Object.getOwnPropertyDescriptor(item, 'r');
+            
+            if (qDesc && rDesc && 'value' in qDesc && 'value' in rDesc) {
+              const qValue: unknown = qDesc.value;
+              const rValue: unknown = rDesc.value;
+              
+              if (typeof qValue === 'number' && typeof rValue === 'number') {
+                const chunk = worldMap.getChunk({ q: qValue, r: rValue });
+                if (chunk && !chunk.getEnabled()) {
+                  chunk.setEnabled(true);
+                  reEnabledCount++;
+                  if (logFn) {
+                    const chunkPos = chunk.getPositionHex();
+                    const distance = HexUtils.HEX_UTILS.distance(
+                      currentChunkHex.q,
+                      currentChunkHex.r,
+                      chunkPos.q,
+                      chunkPos.r
+                    );
+                    logFn(`Re-enabled chunk at (${chunkPos.q}, ${chunkPos.r}) - distance: ${distance.toFixed(2)}`, 'info');
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
+  } catch {
+    // If parsing fails, return false (no changes)
   }
 
   const anyChanges = disabledCount > 0 || reEnabledCount > 0;
@@ -266,13 +308,16 @@ function disableDistantChunks(
 
 /**
  * Ensure the nearest neighbor chunk is instantiated and visible if within threshold
+ * Queues chunk creation asynchronously to avoid blocking
  * @param currentChunkHex - Hex coordinate of current chunk
  * @param worldMap - World map instance
  * @param currentTileHex - Hex coordinate of current tile
  * @param rings - Number of rings per chunk
  * @param hexSize - Size of hexagon for coordinate conversion
+ * @param chunkQueue - Chunk generation queue
+ * @param wasmModule - WASM module instance
  * @param logFn - Optional logging function
- * @returns true if a re-render is needed, false otherwise
+ * @returns true if chunk was queued or enabled, false otherwise
  */
 function ensureNearestNeighborChunkIsVisible(
   currentChunkHex: HexUtils.HexCoord,
@@ -280,42 +325,71 @@ function ensureNearestNeighborChunkIsVisible(
   currentTileHex: HexUtils.HexCoord,
   rings: number,
   hexSize: number,
+  chunkQueue: import('./babylon-chunks/chunkGenerationQueue').ChunkGenerationQueue,
+  canvasManager: import('./babylon-chunks/canvasManagement').CanvasManager,
+  wasmModule: { calculate_chunk_radius: (rings: number) => number; find_nearest_neighbor_chunk: (current_chunk_q: number, current_chunk_r: number, current_tile_q: number, current_tile_r: number, rings: number, existing_chunks_json: string) => string },
   logFn?: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void
 ): boolean {
-  const chunkRadius = calculateChunkRadius(rings);
-  const threshold = chunkRadius * 3;
+  const chunkRadius = wasmModule.calculate_chunk_radius(rings);
+  // Use a more aggressive threshold (2.5x instead of 3x) to preload neighbors earlier
+  // This reduces hiccups when approaching chunk borders
+  const threshold = chunkRadius * 2.5;
   const thresholdWorld = threshold * hexSize * 1.5;
   
   const nearestNeighbor = findNearestNeighborChunk(
     currentChunkHex,
     worldMap,
     currentTileHex,
-    rings
+    rings,
+    wasmModule
   );
   
   if (!nearestNeighbor || nearestNeighbor.distance > thresholdWorld) {
     return false;
   }
   
-  // Check if chunk is instantiated (exists in world map)
-  if (!nearestNeighbor.isInstantiated) {
-    // Chunk doesn't exist - create it
-    const newChunk = worldMap.createChunk(
-      nearestNeighbor.neighbor,
-      rings,
-      hexSize
-    );
-    
-    // Verify chunk was created correctly
-    const chunkExists = worldMap.hasChunk(nearestNeighbor.neighbor);
-    const chunkGrid = newChunk.getGrid();
-    const chunkWorldPos = newChunk.getPositionCartesian();
+  // Check if chunk is instantiated and fully initialized
+  // Note: Placeholder chunks are added to map when queued, so isInstantiated may be true
+  // but the chunk might not be initialized yet. We need to check initialization status.
+  const existingChunk = worldMap.getChunk(nearestNeighbor.neighbor);
+  const isInMap = existingChunk !== undefined;
+  const isFullyInitialized = existingChunk !== undefined && existingChunk.isInitialized();
+  const isInQueue = chunkQueue.hasTask(nearestNeighbor.neighbor);
+  
+  // If chunk doesn't exist or isn't fully initialized, we need to create/initialize it
+  if (!isFullyInitialized && !isInQueue) {
+    // Chunk doesn't exist or isn't initialized - queue it for creation/initialization
+    const priority = 100; // High priority for current chunk's neighbor
     
     if (logFn) {
-      logFn(`Instantiated nearest neighbor chunk at (${nearestNeighbor.neighbor.q}, ${nearestNeighbor.neighbor.r})`, 'info');
-      logFn(`Chunk verification: exists=${chunkExists}, enabled=${newChunk.getEnabled()}, tiles=${chunkGrid.length}`, 'info');
-      logFn(`Chunk world position: (x: ${chunkWorldPos.x.toFixed(2)}, z: ${chunkWorldPos.z.toFixed(2)})`, 'info');
+      if (isInMap) {
+        logFn(`Queueing placeholder chunk at (${nearestNeighbor.neighbor.q}, ${nearestNeighbor.neighbor.r}) for initialization`, 'info');
+      } else {
+        logFn(`Queueing nearest neighbor chunk at (${nearestNeighbor.neighbor.q}, ${nearestNeighbor.neighbor.r}) for creation`, 'info');
+      }
+      logFn(`Distance: ${nearestNeighbor.distance.toFixed(2)}, threshold: ${thresholdWorld.toFixed(2)}`, 'info');
     }
+    
+    chunkQueue.enqueue(nearestNeighbor.neighbor, rings, hexSize, priority, worldMap).then((newChunk) => {
+      // Chunk creation completed
+      const chunkExists = worldMap.hasChunk(nearestNeighbor.neighbor);
+      const chunkGrid = newChunk.getGrid();
+      const chunkWorldPos = newChunk.getPositionCartesian();
+      
+      if (logFn) {
+        logFn(`Instantiated nearest neighbor chunk at (${nearestNeighbor.neighbor.q}, ${nearestNeighbor.neighbor.r})`, 'info');
+        logFn(`Chunk verification: exists=${chunkExists}, enabled=${newChunk.getEnabled()}, tiles=${chunkGrid.length}, initialized=${newChunk.isInitialized()}`, 'info');
+        logFn(`Chunk world position: (x: ${chunkWorldPos.x.toFixed(2)}, z: ${chunkWorldPos.z.toFixed(2)})`, 'info');
+      }
+      
+      // Trigger render when chunk is created
+      canvasManager.renderGrid();
+    }).catch((error) => {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      if (logFn) {
+        logFn(`Failed to create neighbor chunk: ${errorMsg}`, 'error');
+      }
+    });
     
     return true;
   }
@@ -446,12 +520,12 @@ export const init = async (): Promise<void> => {
   canvasManager.setCurrentRings(initialRings);
 
   // Set up pre-constraints generation function for canvas manager
-  canvasManager.setGeneratePreConstraintsFn((constraints: LayoutConstraints) => {
+  canvasManager.setGeneratePreConstraintsFn(async (constraints: LayoutConstraints) => {
     const wasmModule = wasmManager.getModule();
     if (!wasmModule) {
       return [];
     }
-    return constraintsToPreConstraints(
+    return await constraintsToPreConstraints(
       constraints,
       wasmModule,
       canvasManager.getCurrentRings(),
@@ -517,15 +591,18 @@ export const init = async (): Promise<void> => {
   // Create map for chunk management
   const worldMap = new WorldMap();
   
-  // Create origin chunk at (0, 0)
+  // Create chunk generation queue for async chunk creation
+  const chunkQueue = new ChunkGenerationQueue(5); // 5ms frame budget
+  
+  // Create origin chunk at (0, 0) asynchronously
   const originPosition = { q: 0, r: 0 };
-  const originChunk = worldMap.createChunk(
+  const originChunk = await worldMap.createChunk(
     originPosition,
     canvasManager.getCurrentRings(),
     TILE_CONFIG.hexSize
   );
   
-  // Compute neighbors for origin chunk (already computed in constructor)
+  // Compute neighbors for origin chunk (already computed in initializeAsync)
   if (addLogEntry) {
     const neighbors = originChunk.getNeighbors();
     addLogEntry(`Origin chunk created at (0, 0) with ${neighbors.length} neighbors`, 'info');
@@ -577,7 +654,7 @@ export const init = async (): Promise<void> => {
       if (neighbors.length > 0) {
         const firstNeighbor = neighbors[0];
         if (firstNeighbor) {
-          const neighborChunk = worldMap.createChunk(
+          const neighborChunk = await worldMap.createChunk(
             firstNeighbor,
             canvasManager.getCurrentRings(),
             TILE_CONFIG.hexSize
@@ -610,7 +687,7 @@ export const init = async (): Promise<void> => {
     currentTileHex: HexUtils.HexCoord,
     worldMapInstance: WorldMap,
     canvasManagerInstance: CanvasManager
-  ): boolean => {
+  ): { tileChanged: boolean; chunkChanged: boolean } => {
     // Check if current tile has changed - compare integer coordinates exactly
     // Only process if coordinates actually differ
     const tileChanged = previousTileHex === null || 
@@ -620,7 +697,7 @@ export const init = async (): Promise<void> => {
     if (!tileChanged) {
       // Tile hasn't changed - just update UI with current values from player
       canvasManagerInstance.updateTileChunkDisplay(currentTileHex, currentChunkHex, previousTileHex);
-      return false;
+      return { tileChanged: false, chunkChanged: false };
     }
     
     // Tile actually changed - save previous tile
@@ -635,16 +712,18 @@ export const init = async (): Promise<void> => {
     const allChunks = worldMapInstance.getAllChunks();
     const chunkForTile = getChunkForTile(
       currentTileHex,
-      canvasManagerInstance.getCurrentRings(),
+      canvasManagerInstance.getBaseRings(), // Use baseRings for chunk lookup, not currentRings
       allChunks,
       worldMapInstance
     );
+    
+    let chunkChanged = false;
     
     // Always set currentChunkHex if chunkForTile is found
     if (chunkForTile) {
       // Check if chunk changed
       const wasNull = currentChunkHex === null;
-      const chunkChanged = wasNull ||
+      chunkChanged = wasNull ||
                            (currentChunkHex !== null && (
                              currentChunkHex.q !== chunkForTile.q ||
                              currentChunkHex.r !== chunkForTile.r
@@ -667,12 +746,25 @@ export const init = async (): Promise<void> => {
     // Update UI display - use currentTileHex from player (source of truth)
     canvasManagerInstance.updateTileChunkDisplay(currentTileHex, currentChunkHex, previousTileHex);
     
-    return true;
+    return { tileChanged: true, chunkChanged };
   };
   
   if (player && scene) {
     scene.onBeforeRenderObservable.add(() => {
       frameCount++;
+      
+      // Process chunk generation queue incrementally
+      void chunkQueue.processNext(worldMap).then((hasMore) => {
+        if (hasMore) {
+          // More chunks to process - will continue next frame
+          // Trigger render when chunks complete
+          const pendingCount = chunkQueue.getPendingCount();
+          if (pendingCount === 0) {
+            // All chunks processed, trigger render
+            canvasManager.renderGrid();
+          }
+        }
+      });
       
       // Update player every frame (will be no-op if disabled)
       if (player) {
@@ -690,31 +782,41 @@ export const init = async (): Promise<void> => {
       canvasManager.updateFloatingOrigin();
       
       // Check chunk loading every CHECK_INTERVAL frames (only if player is enabled)
-      if (frameCount % CHECK_INTERVAL === 0 && player && player.getEnabled()) {
+      // Also check more frequently (every 5 frames) when near chunk borders to reduce hiccups
+      const isNearBorder = currentChunkHex !== null && previousTileHex !== null;
+      const checkInterval = isNearBorder ? 5 : CHECK_INTERVAL;
+      
+      if (frameCount % checkInterval === 0 && player && player.getEnabled()) {
+        // Get world hex offset from floating origin
+        const worldHexOffset = canvasManager.getWorldHexOffset();
+        
         // Get current tile hex coordinate from player - player is the source of truth
-        const currentTileHex = player.getCurrentTileHex(TILE_CONFIG.hexSize);
+        // Pass world hex offset to account for floating origin shifts
+        const currentTileHex = player.getCurrentTileHex(TILE_CONFIG.hexSize, worldHexOffset);
         
         // Use the same function for both UI update and processing
-        const tileChanged = checkAndUpdateTile(currentTileHex, worldMap, canvasManager);
+        const { tileChanged, chunkChanged } = checkAndUpdateTile(currentTileHex, worldMap, canvasManager);
         
-        // Always check all chunks for disable/enable based on distance (not just when tile changes)
-        // This ensures all chunks, including origin, are properly evaluated
+        // Only check all chunks for disable/enable based on distance when chunk changes
+        // This ensures chunks are properly disabled/enabled when player moves to a different chunk
         let chunksChanged = false;
-        if (currentChunkHex) {
+        const wasmModule = wasmManager.getModule();
+        if (chunkChanged && currentChunkHex && wasmModule) {
           chunksChanged = disableDistantChunks(
             currentChunkHex,
             worldMap,
-            canvasManager.getCurrentRings(),
+            canvasManager.getBaseRings(), // Use baseRings for distance calculation, not currentRings
+            wasmModule,
             addLogEntry ?? undefined
           );
         }
         
         // Only process neighbor loading if tile actually changed
-        if (tileChanged && currentChunkHex) {
+        if (tileChanged && currentChunkHex && wasmModule) {
           
           // Find and log nearest neighbor chunk (only if we have a current chunk) - ONLY when tile changes
           // Use currentTileHex from player (source of truth) - already fetched above
-          const chunkRadius = calculateChunkRadius(canvasManager.getCurrentRings());
+          const chunkRadius = wasmModule.calculate_chunk_radius(canvasManager.getCurrentRings());
           const threshold = chunkRadius * 3;
           const thresholdWorld = threshold * TILE_CONFIG.hexSize * 1.5;
           
@@ -722,7 +824,8 @@ export const init = async (): Promise<void> => {
             currentChunkHex,
             worldMap,
             currentTileHex,
-            canvasManager.getCurrentRings()
+            canvasManager.getCurrentRings(),
+            wasmModule
           );
           
           // Log nearest neighbor stats when tile changes
@@ -738,14 +841,17 @@ export const init = async (): Promise<void> => {
           }
           
           // Ensure nearest neighbor is instantiated and enabled if within threshold
-          const needsRender = ensureNearestNeighborChunkIsVisible(
+          const needsRender = wasmModule ? ensureNearestNeighborChunkIsVisible(
             currentChunkHex,
             worldMap,
             currentTileHex,
-            canvasManager.getCurrentRings(),
+            canvasManager.getBaseRings(), // Use baseRings for chunk creation, not currentRings
             TILE_CONFIG.hexSize,
+            chunkQueue,
+            canvasManager,
+            wasmModule,
             addLogEntry ?? undefined
-          );
+          ) : false;
           
           if (needsRender || chunksChanged) {
             canvasManager.renderGrid();
@@ -837,12 +943,12 @@ export const init = async (): Promise<void> => {
       newCanvasManager.setCurrentRings(currentRings);
 
       // Set up pre-constraints generation function
-      newCanvasManager.setGeneratePreConstraintsFn((constraints: LayoutConstraints) => {
+      newCanvasManager.setGeneratePreConstraintsFn(async (constraints: LayoutConstraints) => {
         const module = wasmManager.getModule();
         if (!module) {
           return [];
         }
-        return constraintsToPreConstraints(
+        return await constraintsToPreConstraints(
           constraints,
           module,
           newCanvasManager.getCurrentRings(),
@@ -863,9 +969,12 @@ export const init = async (): Promise<void> => {
       // Create new map for chunk management
       const newWorldMap = new WorldMap();
 
+      // Create new chunk generation queue
+      const newChunkQueue = new ChunkGenerationQueue(5); // 5ms frame budget
+
       // Create origin chunk at (0, 0) with current rings value
       const originPosition = { q: 0, r: 0 };
-      const originChunk = newWorldMap.createChunk(
+      const originChunk = await newWorldMap.createChunk(
         originPosition,
         currentRings,
         TILE_CONFIG.hexSize
@@ -927,7 +1036,7 @@ export const init = async (): Promise<void> => {
           if (neighbors.length > 0) {
             const firstNeighbor = neighbors[0];
             if (firstNeighbor) {
-              const neighborChunk = newWorldMap.createChunk(
+              const neighborChunk = await newWorldMap.createChunk(
                 firstNeighbor,
                 currentRings,
                 TILE_CONFIG.hexSize
@@ -954,6 +1063,19 @@ export const init = async (): Promise<void> => {
         newScene.onBeforeRenderObservable.add(() => {
           frameCount++;
           
+          // Process chunk generation queue incrementally
+          void newChunkQueue.processNext(newWorldMap).then((hasMore) => {
+            if (hasMore) {
+              // More chunks to process - will continue next frame
+              // Trigger render when chunks complete
+              const pendingCount = newChunkQueue.getPendingCount();
+              if (pendingCount === 0) {
+                // All chunks processed, trigger render
+                newCanvasManager.renderGrid();
+              }
+            }
+          });
+          
           // Update player every frame (will be no-op if disabled)
           if (player) {
             player.update();
@@ -970,37 +1092,50 @@ export const init = async (): Promise<void> => {
           newCanvasManager.updateFloatingOrigin();
           
           // Check chunk loading every CHECK_INTERVAL frames (only if player is enabled)
-          if (frameCount % CHECK_INTERVAL === 0 && player && player.getEnabled()) {
+          // Also check more frequently (every 5 frames) when near chunk borders to reduce hiccups
+          const isNearBorderForReinit = currentChunkHex !== null && previousTileHex !== null;
+          const checkIntervalForReinit = isNearBorderForReinit ? 5 : CHECK_INTERVAL;
+          
+          if (frameCount % checkIntervalForReinit === 0 && player && player.getEnabled()) {
+            // Get world hex offset from floating origin
+            const worldHexOffsetForReinit = newCanvasManager.getWorldHexOffset();
+            
             // Get current tile hex coordinate from player - player is the source of truth
-            const currentTileHex = player.getCurrentTileHex(TILE_CONFIG.hexSize);
+            // Pass world hex offset to account for floating origin shifts
+            const currentTileHex = player.getCurrentTileHex(TILE_CONFIG.hexSize, worldHexOffsetForReinit);
             
             // Use the same function for both UI update and processing
-            const tileChanged = checkAndUpdateTile(currentTileHex, newWorldMap, newCanvasManager);
+            const { tileChanged, chunkChanged } = checkAndUpdateTile(currentTileHex, newWorldMap, newCanvasManager);
             
-            // Always check all chunks for disable/enable based on distance (not just when tile changes)
-            // This ensures all chunks, including origin, are properly evaluated
+            // Only check all chunks for disable/enable based on distance when chunk changes
+            // This ensures chunks are properly disabled/enabled when player moves to a different chunk
             let chunksChanged = false;
-            if (currentChunkHex) {
+            const wasmModuleForReinit = wasmManager.getModule();
+            if (chunkChanged && currentChunkHex && wasmModuleForReinit) {
               chunksChanged = disableDistantChunks(
                 currentChunkHex,
                 newWorldMap,
-                newCanvasManager.getCurrentRings(),
+                newCanvasManager.getBaseRings(), // Use baseRings for distance calculation, not currentRings
+                wasmModuleForReinit,
                 addLogEntry ?? undefined
               );
             }
             
             // Only process neighbor loading if tile actually changed
-            if (tileChanged && currentChunkHex) {
+            if (tileChanged && currentChunkHex && wasmModuleForReinit) {
               // Use currentTileHex from player (source of truth) - already fetched above
-              const chunkRadius = calculateChunkRadius(newCanvasManager.getCurrentRings());
-              const threshold = chunkRadius * 3;
+              const chunkRadius = wasmModuleForReinit.calculate_chunk_radius(newCanvasManager.getCurrentRings());
+              // Use a more aggressive threshold (2.5x instead of 3x) to preload neighbors earlier
+              // This reduces hiccups when approaching chunk borders
+              const threshold = chunkRadius * 2.5;
               const thresholdWorld = threshold * TILE_CONFIG.hexSize * 1.5;
               
               const nearestNeighbor = findNearestNeighborChunk(
                 currentChunkHex,
                 newWorldMap,
                 currentTileHex,
-                newCanvasManager.getCurrentRings()
+                newCanvasManager.getCurrentRings(),
+                wasmModuleForReinit
               );
               
               // Log nearest neighbor stats when tile changes
@@ -1020,8 +1155,11 @@ export const init = async (): Promise<void> => {
                 currentChunkHex,
                 newWorldMap,
                 currentTileHex,
-                newCanvasManager.getCurrentRings(),
+                newCanvasManager.getBaseRings(), // Use baseRings for chunk creation
                 TILE_CONFIG.hexSize,
+                newChunkQueue,
+                newCanvasManager,
+                wasmModuleForReinit,
                 addLogEntry ?? undefined
               );
               

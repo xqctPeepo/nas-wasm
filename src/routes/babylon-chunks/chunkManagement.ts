@@ -33,16 +33,19 @@ export class Chunk {
    * Once true, the chunk's tile composition should never change
    */
   private tilesGenerated: boolean = false;
+  /**
+   * Whether this chunk has been fully initialized (grid populated, neighbors calculated)
+   */
+  private initialized: boolean = false;
 
   /**
-   * Create a new chunk
+   * Create a new chunk (lightweight constructor)
+   * Chunk structure is created immediately, but grid is populated asynchronously
    * @param positionHex - Central cell position in hex space (q, r)
-   * @param rings - Number of rings around the center
    * @param hexSize - Size of hexagon for coordinate conversion
    */
   constructor(
     positionHex: HexUtils.HexCoord,
-    rings: number,
     hexSize: number
   ) {
     this.positionHex = positionHex;
@@ -52,19 +55,54 @@ export class Chunk {
     const worldPos = HexUtils.HEX_UTILS.hexToWorld(positionHex.q, positionHex.r, hexSize);
     this.positionCartesian = { x: worldPos.x, z: worldPos.z };
     
-    // Generate grid in rings around the central position
-    const hexGrid = HexUtils.HEX_UTILS.generateHexGrid(rings, positionHex.q, positionHex.r);
+    // Initialize empty grid - will be populated in initializeAsync()
+    this.grid = [];
     
-    // Validate that all generated tiles are within the ring count
+    // Neighbors will be calculated in initializeAsync()
+    this.neighbors = [];
+  }
+
+  /**
+   * Initialize the chunk asynchronously
+   * Populates the grid and calculates neighbors incrementally
+   * @param rings - Number of rings around the center
+   */
+  async initializeAsync(rings: number): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    const BATCH_SIZE = 150; // tiles per frame
+    
+    // Generate grid in rings around the central position
+    const hexGrid = HexUtils.HEX_UTILS.generateHexGrid(rings, this.positionHex.q, this.positionHex.r);
+    
+    // Validate and populate grid in batches
     const validatedGrid: Array<ChunkTile> = [];
-    for (const hex of hexGrid) {
-      const distance = HexUtils.HEX_UTILS.distance(positionHex.q, positionHex.r, hex.q, hex.r);
-      if (distance <= rings) {
-        validatedGrid.push({
-          hex,
-          tileType: null,
-          enabled: true,
-          meshInstance: null,
+    const totalTiles = hexGrid.length;
+    
+    for (let i = 0; i < totalTiles; i += BATCH_SIZE) {
+      const batch = hexGrid.slice(i, Math.min(i + BATCH_SIZE, totalTiles));
+      
+      // Process batch
+      for (const hex of batch) {
+        const distance = HexUtils.HEX_UTILS.distance(this.positionHex.q, this.positionHex.r, hex.q, hex.r);
+        if (distance <= rings) {
+          validatedGrid.push({
+            hex,
+            tileType: null,
+            enabled: true,
+            meshInstance: null,
+          });
+        }
+      }
+      
+      // Yield control if not last batch
+      if (i + BATCH_SIZE < totalTiles) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
         });
       }
     }
@@ -80,7 +118,16 @@ export class Chunk {
     // - For rings=0: uses offset (1, 0) rotated 6 times (distance 1 neighbors)
     // - For rings=1: uses offset (1, 2) rotated 6 times (distance 3 neighbors)
     // - For rings=2: uses offset (2, 3) rotated 6 times (distance 5 neighbors)
-    this.neighbors = this.calculateChunkNeighbors(positionHex, rings);
+    this.neighbors = this.calculateChunkNeighbors(this.positionHex, rings);
+    
+    this.initialized = true;
+  }
+
+  /**
+   * Check if chunk is fully initialized
+   */
+  isInitialized(): boolean {
+    return this.initialized;
   }
 
   /**
@@ -91,10 +138,38 @@ export class Chunk {
   }
 
   /**
+   * Set the chunk's grid (for incremental initialization)
+   */
+  setGrid(grid: Array<ChunkTile>): void {
+    this.grid = grid;
+  }
+
+  /**
+   * Set the chunk's neighbors (for incremental initialization)
+   */
+  setNeighbors(neighbors: Array<HexUtils.HexCoord>): void {
+    this.neighbors = neighbors;
+  }
+
+  /**
+   * Mark chunk as initialized (for incremental initialization)
+   */
+  markInitialized(): void {
+    this.initialized = true;
+  }
+
+  /**
    * Get the chunk's central position in hex space
    */
   getPositionHex(): HexUtils.HexCoord {
     return this.positionHex;
+  }
+
+  /**
+   * Calculate chunk neighbors (public method for incremental initialization)
+   */
+  calculateChunkNeighborsPublic(rings: number): Array<HexUtils.HexCoord> {
+    return this.calculateChunkNeighbors(this.positionHex, rings);
   }
 
   /**
@@ -277,39 +352,100 @@ export class WorldMap {
   }
 
   /**
-   * Create a new chunk at the specified position
+   * Add a placeholder chunk to the map immediately
+   * Used when queuing chunk creation - ensures chunk is visible to findNearestNeighborChunk
+   * @param positionHex - Central cell position in hex space (q, r)
+   * @param chunk - Placeholder chunk to add
+   */
+  addChunkPlaceholder(positionHex: HexUtils.HexCoord, chunk: Chunk): void {
+    const key = this.getChunkKey(positionHex);
+    
+    // Only add if chunk doesn't already exist
+    if (!this.chunks.has(key)) {
+      this.chunks.set(key, chunk);
+    }
+  }
+
+  /**
+   * Add a single entry to the spatial index
+   * Used for incremental spatial index updates
+   * @param tileKey - Tile key string "q,r"
+   * @param chunkHex - Chunk position hex coordinate
+   */
+  addSpatialIndexEntry(tileKey: string, chunkHex: HexUtils.HexCoord): void {
+    this.spatialIndex.set(tileKey, chunkHex);
+  }
+
+  /**
+   * Create a new chunk at the specified position asynchronously
    * If chunk already exists, returns the existing chunk (never re-creates)
    * @param positionHex - Central cell position in hex space (q, r)
    * @param rings - Number of rings around the center
    * @param hexSize - Size of hexagon for coordinate conversion
-   * @returns The created or existing chunk
+   * @returns Promise that resolves to the created or existing chunk
    */
-  createChunk(
+  async createChunk(
     positionHex: HexUtils.HexCoord,
     rings: number,
     hexSize: number
-  ): Chunk {
+  ): Promise<Chunk> {
     const key = this.getChunkKey(positionHex);
     
     // Check if chunk already exists - never re-create existing chunks
     const existing = this.chunks.get(key);
     if (existing) {
-      // Chunk already exists, return it without modification
+      // If existing chunk is not initialized, wait for it
+      if (!existing.isInitialized()) {
+        await existing.initializeAsync(rings);
+      }
       return existing;
     }
     
-    // Create new chunk only if it doesn't exist
-    const chunk = new Chunk(positionHex, rings, hexSize);
+    // Create new chunk structure (lightweight)
+    const chunk = new Chunk(positionHex, hexSize);
     this.chunks.set(key, chunk);
     
-    // Update spatial index: add all tiles in this chunk to the index
-    const chunkGrid = chunk.getGrid();
-    for (const tile of chunkGrid) {
-      const tileKey = `${tile.hex.q},${tile.hex.r}`;
-      this.spatialIndex.set(tileKey, positionHex);
-    }
+    // Initialize asynchronously
+    await chunk.initializeAsync(rings);
+    
+    // Update spatial index incrementally
+    await this.updateSpatialIndexIncremental(chunk, positionHex);
     
     return chunk;
+  }
+
+  /**
+   * Update spatial index incrementally for a chunk
+   * Processes tiles in batches to avoid blocking
+   * @param chunk - Chunk to index
+   * @param positionHex - Chunk position
+   */
+  private async updateSpatialIndexIncremental(
+    chunk: Chunk,
+    positionHex: HexUtils.HexCoord
+  ): Promise<void> {
+    const chunkGrid = chunk.getGrid();
+    const BATCH_SIZE = 200; // tiles per frame
+    const totalTiles = chunkGrid.length;
+    
+    for (let i = 0; i < totalTiles; i += BATCH_SIZE) {
+      const batch = chunkGrid.slice(i, Math.min(i + BATCH_SIZE, totalTiles));
+      
+      // Process batch
+      for (const tile of batch) {
+        const tileKey = `${tile.hex.q},${tile.hex.r}`;
+        this.spatialIndex.set(tileKey, positionHex);
+      }
+      
+      // Yield control if not last batch
+      if (i + BATCH_SIZE < totalTiles) {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      }
+    }
   }
 
   /**

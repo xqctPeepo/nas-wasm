@@ -100,13 +100,37 @@ export class Player {
 
   /**
    * Get the current tile hex coordinate based on player's position
+   * Uses local position (relative to floating origin) to avoid overflow/infinity errors
    * @param hexSize - Size of hexagon for coordinate conversion
+   * @param worldHexOffset - Optional world hex offset from floating origin shifts
    * @returns Current tile hex coordinate
    */
-  getCurrentTileHex(hexSize: number): HexUtils.HexCoord {
+  getCurrentTileHex(hexSize: number, worldHexOffset?: { q: number; r: number }): HexUtils.HexCoord {
     const avatar = this.getAvatar();
-    const avatarPos = avatar.getPosition();
-    return HexUtils.HEX_UTILS.worldToHex(-avatarPos.x, avatarPos.z, hexSize);
+    const avatarMesh = avatar.getMesh();
+    
+    if (!avatarMesh) {
+      return { q: 0, r: 0 };
+    }
+    
+    // Use local position (relative to floating origin) instead of absolute position
+    // This prevents overflow/infinity errors when far from origin
+    // The local position is always small because floating origin keeps player near (0,0,0)
+    const localPos = avatarMesh.position;
+    
+    // Convert local position to hex coordinates
+    // Note: x is negated to match the coordinate system convention
+    const localHex = HexUtils.HEX_UTILS.worldToHex(-localPos.x, localPos.z, hexSize);
+    
+    // Add world hex offset if provided (from floating origin shifts)
+    if (worldHexOffset) {
+      return {
+        q: localHex.q + worldHexOffset.q,
+        r: localHex.r + worldHexOffset.r,
+      };
+    }
+    
+    return localHex;
   }
 
   /**

@@ -103,7 +103,7 @@ export class TestManager {
    * 
    * This version actually creates the neighbor chunks
    */
-  testOriginChunkNeighborsWithCreation(rings: number, hexSize: number): void {
+  async testOriginChunkNeighborsWithCreation(rings: number, hexSize: number): Promise<void> {
     this.log('Running test: Instantiate origin chunk neighbors (with creation)', 'info');
     
     // Get origin chunk at (0, 0)
@@ -136,8 +136,8 @@ export class TestManager {
         this.log(`Neighbor chunk already exists at (${neighborPos.q}, ${neighborPos.r})`, 'warning');
         existingCount++;
       } else {
-        // Create the neighbor chunk
-        this.map.createChunk(neighborPos, rings, hexSize);
+        // Create the neighbor chunk asynchronously
+        await this.map.createChunk(neighborPos, rings, hexSize);
         this.log(`Created neighbor chunk at (${neighborPos.q}, ${neighborPos.r})`, 'info');
         createdCount++;
       }

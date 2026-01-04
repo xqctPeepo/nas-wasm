@@ -142,6 +142,17 @@ export class WasmManager {
     const buildPathBetweenRoadsValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'build_path_between_roads') : getProperty(exports, 'build_path_between_roads');
     const generateRoadNetworkGrowingTreeValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'generate_road_network_growing_tree') : getProperty(exports, 'generate_road_network_growing_tree');
     const getWasmVersionValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'get_wasm_version') : getProperty(exports, 'get_wasm_version');
+    const calculateChunkRadiusValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'calculate_chunk_radius') : getProperty(exports, 'calculate_chunk_radius');
+    const calculateChunkNeighborsValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'calculate_chunk_neighbors') : getProperty(exports, 'calculate_chunk_neighbors');
+    const findNearestNeighborChunkValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'find_nearest_neighbor_chunk') : getProperty(exports, 'find_nearest_neighbor_chunk');
+    const disableDistantChunksValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'disable_distant_chunks') : getProperty(exports, 'disable_distant_chunks');
+    const batchGetTileTypesValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'batch_get_tile_types') : getProperty(exports, 'batch_get_tile_types');
+    const calculateChunkForTileValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'calculate_chunk_for_tile') : getProperty(exports, 'calculate_chunk_for_tile');
+    const shuffleArrayValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'shuffle_array') : getProperty(exports, 'shuffle_array');
+    const countAdjacentRoadsValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'count_adjacent_roads') : getProperty(exports, 'count_adjacent_roads');
+    const getAdjacentValidTerrainValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'get_adjacent_valid_terrain') : getProperty(exports, 'get_adjacent_valid_terrain');
+    const generateBuildingPlacementValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'generate_building_placement') : getProperty(exports, 'generate_building_placement');
+    const batchHexToWorldValue = this.wasmModuleRecord ? getProperty(this.wasmModuleRecord, 'batch_hex_to_world') : getProperty(exports, 'batch_hex_to_world');
     
     if (typeof generateLayoutValue !== 'function') {
       missingExports.push('generate_layout (function)');
@@ -176,6 +187,39 @@ export class WasmManager {
     if (typeof generateRoadNetworkGrowingTreeValue !== 'function') {
       missingExports.push('generate_road_network_growing_tree (function)');
     }
+    if (typeof calculateChunkRadiusValue !== 'function') {
+      missingExports.push('calculate_chunk_radius (function)');
+    }
+    if (typeof calculateChunkNeighborsValue !== 'function') {
+      missingExports.push('calculate_chunk_neighbors (function)');
+    }
+    if (typeof findNearestNeighborChunkValue !== 'function') {
+      missingExports.push('find_nearest_neighbor_chunk (function)');
+    }
+    if (typeof disableDistantChunksValue !== 'function') {
+      missingExports.push('disable_distant_chunks (function)');
+    }
+    if (typeof batchGetTileTypesValue !== 'function') {
+      missingExports.push('batch_get_tile_types (function)');
+    }
+    if (typeof calculateChunkForTileValue !== 'function') {
+      missingExports.push('calculate_chunk_for_tile (function)');
+    }
+    if (typeof shuffleArrayValue !== 'function') {
+      missingExports.push('shuffle_array (function)');
+    }
+    if (typeof countAdjacentRoadsValue !== 'function') {
+      missingExports.push('count_adjacent_roads (function)');
+    }
+    if (typeof getAdjacentValidTerrainValue !== 'function') {
+      missingExports.push('get_adjacent_valid_terrain (function)');
+    }
+    if (typeof generateBuildingPlacementValue !== 'function') {
+      missingExports.push('generate_building_placement (function)');
+    }
+    if (typeof batchHexToWorldValue !== 'function') {
+      missingExports.push('batch_hex_to_world (function)');
+    }
     
     if (missingExports.length > 0) {
       throw new Error(`WASM module missing required exports: ${missingExports.join(', ')}. Available exports from init result: ${exportKeys.join(', ')}`);
@@ -199,6 +243,17 @@ export class WasmManager {
     const buildPathBetweenRoadsFunc = buildPathBetweenRoadsValue;
     const generateRoadNetworkGrowingTreeFunc = generateRoadNetworkGrowingTreeValue;
     const getWasmVersionFunc = getWasmVersionValue;
+    const calculateChunkRadiusFunc = calculateChunkRadiusValue;
+    const calculateChunkNeighborsFunc = calculateChunkNeighborsValue;
+    const findNearestNeighborChunkFunc = findNearestNeighborChunkValue;
+    const disableDistantChunksFunc = disableDistantChunksValue;
+    const batchGetTileTypesFunc = batchGetTileTypesValue;
+    const calculateChunkForTileFunc = calculateChunkForTileValue;
+    const shuffleArrayFunc = shuffleArrayValue;
+    const countAdjacentRoadsFunc = countAdjacentRoadsValue;
+    const getAdjacentValidTerrainFunc = getAdjacentValidTerrainValue;
+    const generateBuildingPlacementFunc = generateBuildingPlacementValue;
+    const batchHexToWorldFunc = batchHexToWorldValue;
     
     if (
       typeof generateLayoutFunc !== 'function' ||
@@ -212,7 +267,18 @@ export class WasmManager {
       typeof hexAstarFunc !== 'function' ||
       typeof buildPathBetweenRoadsFunc !== 'function' ||
       typeof generateRoadNetworkGrowingTreeFunc !== 'function' ||
-      typeof getWasmVersionFunc !== 'function'
+      typeof getWasmVersionFunc !== 'function' ||
+      typeof calculateChunkRadiusFunc !== 'function' ||
+      typeof calculateChunkNeighborsFunc !== 'function' ||
+      typeof findNearestNeighborChunkFunc !== 'function' ||
+      typeof disableDistantChunksFunc !== 'function' ||
+      typeof batchGetTileTypesFunc !== 'function' ||
+      typeof calculateChunkForTileFunc !== 'function' ||
+      typeof shuffleArrayFunc !== 'function' ||
+      typeof countAdjacentRoadsFunc !== 'function' ||
+      typeof getAdjacentValidTerrainFunc !== 'function' ||
+      typeof generateBuildingPlacementFunc !== 'function' ||
+      typeof batchHexToWorldFunc !== 'function'
     ) {
       return null;
     }
@@ -309,6 +375,88 @@ export class WasmManager {
           const errorMsg = error instanceof Error ? error.message : 'Unknown error';
           return `unknown (error: ${errorMsg})`;
         }
+      },
+      calculate_chunk_radius: (rings: number): number => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = calculateChunkRadiusFunc(rings);
+        return typeof result === 'number' ? result : rings;
+      },
+      calculate_chunk_neighbors: (center_q: number, center_r: number, rings: number): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = calculateChunkNeighborsFunc(center_q, center_r, rings);
+        return typeof result === 'string' ? result : '[]';
+      },
+      find_nearest_neighbor_chunk: (
+        current_chunk_q: number,
+        current_chunk_r: number,
+        current_tile_q: number,
+        current_tile_r: number,
+        rings: number,
+        existing_chunks_json: string
+      ): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = findNearestNeighborChunkFunc(current_chunk_q, current_chunk_r, current_tile_q, current_tile_r, rings, existing_chunks_json);
+        return typeof result === 'string' ? result : 'null';
+      },
+      disable_distant_chunks: (
+        current_chunk_q: number,
+        current_chunk_r: number,
+        all_chunks_json: string,
+        max_distance: number
+      ): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = disableDistantChunksFunc(current_chunk_q, current_chunk_r, all_chunks_json, max_distance);
+        return typeof result === 'string' ? result : '{"toDisable":[],"toEnable":[]}';
+      },
+      batch_get_tile_types: (hex_coords_json: string): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = batchGetTileTypesFunc(hex_coords_json);
+        return typeof result === 'string' ? result : '[]';
+      },
+      calculate_chunk_for_tile: (
+        tile_q: number,
+        tile_r: number,
+        rings: number,
+        chunk_positions_json: string
+      ): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = calculateChunkForTileFunc(tile_q, tile_r, rings, chunk_positions_json);
+        return typeof result === 'string' ? result : 'null';
+      },
+      shuffle_array: (array_json: string): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = shuffleArrayFunc(array_json);
+        return typeof result === 'string' ? result : '[]';
+      },
+      count_adjacent_roads: (hex_q: number, hex_r: number, road_network_json: string): number => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = countAdjacentRoadsFunc(hex_q, hex_r, road_network_json);
+        return typeof result === 'number' ? result : 0;
+      },
+      get_adjacent_valid_terrain: (
+        road_network_json: string,
+        valid_terrain_json: string,
+        occupied_json: string
+      ): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = getAdjacentValidTerrainFunc(road_network_json, valid_terrain_json, occupied_json);
+        return typeof result === 'string' ? result : '[]';
+      },
+      generate_building_placement: (
+        valid_terrain_json: string,
+        road_network_json: string,
+        occupied_json: string,
+        building_rules_json: string,
+        target_count: number
+      ): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = generateBuildingPlacementFunc(valid_terrain_json, road_network_json, occupied_json, building_rules_json, target_count);
+        return typeof result === 'string' ? result : '[]';
+      },
+      batch_hex_to_world: (hex_coords_json: string, hex_size: number): string => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+        const result = batchHexToWorldFunc(hex_coords_json, hex_size);
+        return typeof result === 'string' ? result : '[]';
       },
     };
   }

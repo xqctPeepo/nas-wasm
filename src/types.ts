@@ -313,6 +313,44 @@ export interface WasmModuleBabylonWfc {
  */
 export interface WasmModuleBabylonChunks extends WasmModuleBabylonWfc {
   get_wasm_version(): string;
+  calculate_chunk_radius(rings: number): number;
+  calculate_chunk_neighbors(center_q: number, center_r: number, rings: number): string;
+  find_nearest_neighbor_chunk(
+    current_chunk_q: number,
+    current_chunk_r: number,
+    current_tile_q: number,
+    current_tile_r: number,
+    rings: number,
+    existing_chunks_json: string
+  ): string;
+  disable_distant_chunks(
+    current_chunk_q: number,
+    current_chunk_r: number,
+    all_chunks_json: string,
+    max_distance: number
+  ): string;
+  batch_get_tile_types(hex_coords_json: string): string;
+  calculate_chunk_for_tile(
+    tile_q: number,
+    tile_r: number,
+    rings: number,
+    chunk_positions_json: string
+  ): string;
+  shuffle_array(array_json: string): string;
+  count_adjacent_roads(hex_q: number, hex_r: number, road_network_json: string): number;
+  get_adjacent_valid_terrain(
+    road_network_json: string,
+    valid_terrain_json: string,
+    occupied_json: string
+  ): string;
+  generate_building_placement(
+    valid_terrain_json: string,
+    road_network_json: string,
+    occupied_json: string,
+    building_rules_json: string,
+    target_count: number
+  ): string;
+  batch_hex_to_world(hex_coords_json: string, hex_size: number): string;
 }
 
 /**
